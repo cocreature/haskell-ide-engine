@@ -2,6 +2,8 @@ module Haskell.Ide.Engine.Transport.JsonTcp where
 
 import           Control.Concurrent
 import           Control.Concurrent.STM.TChan
+import           Control.Monad
+import           Control.Monad.IO.Class
 import           Control.Monad.STM
 import           Haskell.Ide.Engine.Transport.Pipes
 import           Haskell.Ide.Engine.Types
@@ -12,14 +14,18 @@ jsonTcpTransport :: Bool -> TChan ChannelRequest -> HostPreference -> ServiceNam
 jsonTcpTransport oneShot cin host service =
   do cout <- atomically $ newTChan :: IO (TChan ChannelResponse)
      runSafeT $
-       serve host service $
-       \(socket,_addr) ->
-         do let producer = fromSocket socket 4096
-                consumer = toSocket socket
-            _ <-
-              forkIO $
-              P.runEffect
-                (parseFrames producer P.>-> parseToJsonPipe oneShot cin cout 1)
-            P.runEffect
-              (tchanProducer oneShot cout P.>-> encodePipe P.>-> serializePipe P.>->
-               consumer)
+       listen host service $
+       \(lsock,_addr) ->
+         do liftIO $ putStrLn $ "{\"tcp\": {\"port\": " ++ service ++ "}}"
+            forever $ acceptFork lsock $ \(socket,_addr) ->
+              do let producer = fromSocket socket 4096
+                     consumer = toSocket socket
+                 _ <-
+                   forkIO $
+                   P.runEffect
+                     (parseFrames producer P.>->
+                      parseToJsonPipe oneShot cin cout 1)
+                 P.runEffect
+                   (tchanProducer oneShot cout P.>-> encodePipe P.>->
+                    serializePipe P.>->
+                    consumer)

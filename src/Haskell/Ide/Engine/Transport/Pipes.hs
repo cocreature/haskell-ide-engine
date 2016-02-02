@@ -7,6 +7,7 @@ module Haskell.Ide.Engine.Transport.Pipes
   ,tchanProducer
   ,parseFrames
   ,serializePipe
+  ,channelToWire
   ) where
 
 import           Control.Applicative
