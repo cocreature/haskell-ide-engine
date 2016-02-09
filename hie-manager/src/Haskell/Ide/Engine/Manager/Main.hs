@@ -1,8 +1,10 @@
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
 module Main where
 
+import           Control.Lens
 import           Control.Monad.State
 import           Data.Aeson
 import qualified Data.Map as M
@@ -18,6 +20,15 @@ import           Pipes.Concurrent
 import           Pipes.Network.TCP.Safe hiding (send)
 import qualified Pipes.Prelude as P
 
+data Process =
+  Process {processIn :: Output WireRequest}
+
+data HieState =
+  HieState {_stateTCP :: Int
+           ,_stateProcessCache :: M.Map FilePath Process}
+
+makeLenses ''HieState
+
 main :: IO ()
 main =
   do opts <- execParser optsParser
@@ -32,12 +43,6 @@ main =
           info (helper <*> managerOpts)
                (fullDesc <> progDesc "Manage multiple hie sessions" <>
                 header "hie-manager - manager for hie sessions")
-
-data Process = Process {processCabal :: FilePath}
-
-data HieState =
-  HieState {stateTCP :: Int
-           ,stateProcessCache :: M.Map FilePath Process}
 
 sendOutput :: (MonadIO m) => Socket -> Input Value -> STM () -> m ()
 sendOutput socket input seal =
@@ -81,7 +86,21 @@ dispatchRequest out (WireReq cmd' params') =
       (CResp "" 0 $
        IdeResponseError (IdeError MissingParameter "Need a file parameter" Null))
     Just (ParamFileP file) ->
-      do cache <- gets stateProcessCache
-         case M.lookup (T.unpack file) cache of
-           Nothing -> undefined
+      do let filePath = T.unpack file
+         cache <- gets _stateProcessCache
+         case M.lookup filePath cache of
+           Nothing ->
+             do (processOut,_seal) <- startProcess out
+                stateProcessCache %=  (M.insert filePath (Process processOut))
+                void . liftIO . atomically . (send processOut) $
+                  WireReq cmd' params'
            Just x -> undefined
+
+startProcess :: (MonadIO m) => Output Value -> m (Output WireRequest,STM ())
+startProcess out =
+  do (procOut,procIn,procSeal) <- liftIO (spawn' unbounded)
+     liftIO $ forkIO (sessionProcess out procIn)
+     pure (procOut,procSeal)
+
+sessionProcess :: Output Value -> Input WireRequest -> IO ()
+sessionProcess = undefined
