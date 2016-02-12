@@ -3,6 +3,7 @@
 module Haskell.Ide.Engine.Transport.Pipes
   (parseToJsonPipe
   ,WireRequest(..)
+  ,WireResponse(..)
   ,encodePipe
   ,tchanProducer
   ,parseFrames
@@ -115,10 +116,10 @@ instance FromJSON WireResponse where
     parseJSON p = return $ WireResp p
 
 parseFrames
-  :: forall m.
-     Monad m
+  :: forall m a.
+     (Monad m, FromJSON a)
   => P.Producer PB.ByteString m ()
-  -> P.Producer (Either PAe.DecodingError WireRequest) m ()
+  -> P.Producer (Either PAe.DecodingError a) m ()
 parseFrames prod0 = do
   -- if there are no more bytes, we just return ()
   (isEmpty, prod1) <- lift $ runStateT PB.isEndOfBytes prod0
@@ -131,7 +132,7 @@ parseFrames prod0 = do
     -- endOfInput: we want to be sure that the given
     -- parser consumes the entirety of the given input
     go :: P.Producer PB.ByteString m ()
-       -> P.Producer (Either PAe.DecodingError WireRequest) m ()
+       -> P.Producer (Either PAe.DecodingError a) m ()
     go prod = do
        let splitProd :: P.Producer PB.ByteString m (P.Producer PB.ByteString m ())
            splitProd = view (PB.break (== fromIntegral (ord '\STX'))) prod
@@ -139,7 +140,7 @@ parseFrames prod0 = do
        case maybeRet of
          Nothing -> return ()
          Just (ret) -> do
-           let maybeWrappedRet :: Maybe (Either PAe.DecodingError WireRequest)
+           let maybeWrappedRet :: Maybe (Either PAe.DecodingError a)
                maybeWrappedRet = case ret of
                                              Left parseErr -> pure $ Left $ PAe.AttoparsecError parseErr
                                              Right (Just a) -> case fromJSON a of

@@ -26,16 +26,21 @@ executable hie-manager
                      , bytestring
                      , containers
                      , directory
+                     , exceptions
                      , filepath
                      , haskell-ide-engine
                      , hie-base
+                     , lens
                      , mtl
                      , optparse-applicative
                      , pipes
-                     , pipes-aeson >= 0.4
+                     , pipes-aeson
+                     , pipes-bytestring
                      , pipes-concurrency
                      , pipes-network
+                     , process
                      , text
+                     , time
   hs-source-dirs:      src
   ghc-options:         -Wall
   if flag(pedantic)

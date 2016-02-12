@@ -1,14 +1,21 @@
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
 module Main where
 
+import           Control.Concurrent hiding (yield)
+import           Control.Exception.Base hiding (catch)
 import           Control.Lens
+import           Control.Monad.Catch
 import           Control.Monad.State
+import qualified Control.Monad.State.Strict as SS
 import           Data.Aeson
 import qualified Data.Map as M
 import qualified Data.Text as T
+import           Data.Time.Clock
+import           Data.Typeable
 import           Haskell.Ide.Engine.Manager.Options
 import           Haskell.Ide.Engine.PluginTypes
 import           Haskell.Ide.Engine.Transport.Pipes
@@ -16,9 +23,12 @@ import           Haskell.Ide.Engine.Types
 import           Options.Applicative
 import           Pipes
 import qualified Pipes.Aeson as PAe
+import qualified Pipes.ByteString as PB
 import           Pipes.Concurrent
 import           Pipes.Network.TCP.Safe hiding (send)
 import qualified Pipes.Prelude as P
+import           System.FilePath
+import           System.Process
 
 data Process =
   Process {processIn :: Output WireRequest}
@@ -36,7 +46,8 @@ main =
      runSafeT $
        serve "localhost" (show (port opts)) $
        \(socket,_addr) ->
-         do _ <- forkIO $ sendOutput socket input seal
+         do putStrLn "serving"
+            _ <- forkIO $ sendOutput socket input seal
             flip evalStateT (HieState (port opts + 1) M.empty) $
               parseInput socket output seal
   where optsParser =
@@ -55,9 +66,9 @@ parseInput socket output seal =
   where producer = fromSocket socket 4096
 
 filterErrors
-  :: (MonadIO m)
+  :: (MonadIO m, FromJSON a)
   => Output Value
-  -> Pipe (Either PAe.DecodingError WireRequest) WireRequest m ()
+  -> Pipe (Either PAe.DecodingError a) a m ()
 filterErrors out =
   P.chain (\case
              Right _ -> pure ()
@@ -80,27 +91,105 @@ requestDispatcher = P.mapM_ . dispatchRequest
 
 dispatchRequest :: (MonadIO m, MonadState HieState m) => Output Value -> WireRequest -> m ()
 dispatchRequest out (WireReq cmd' params') =
-  case M.lookup "file" params' of
-    Nothing ->
-      void . liftIO . atomically . (send out) . toJSON . channelToWire $
-      (CResp "" 0 $
-       IdeResponseError (IdeError MissingParameter "Need a file parameter" Null))
-    Just (ParamFileP file) ->
-      do let filePath = T.unpack file
-         cache <- gets _stateProcessCache
-         case M.lookup filePath cache of
-           Nothing ->
-             do (processOut,_seal) <- startProcess out
-                stateProcessCache %=  (M.insert filePath (Process processOut))
-                void . liftIO . atomically . (send processOut) $
-                  WireReq cmd' params'
-           Just x -> undefined
+  do liftIO $ putStrLn $ "dispatching request " <> show params'
+     case M.lookup "file" params' of
+       Nothing ->
+         void . liftIO . atomically . (send out) . toJSON . channelToWire $
+         (CResp "" 0 $
+          IdeResponseError (IdeError MissingParameter "Need a file parameter" Null))
+       Just (ParamFileP file) ->
+         do let filePath = T.unpack file
+            cache <- gets _stateProcessCache
+            case M.lookup filePath cache of
+              Nothing ->
+                do (processOut,_seal) <- startProcess out filePath
+                   stateProcessCache %=
+                     (M.insert filePath (Process processOut))
+                   void . liftIO . atomically . (send processOut) $
+                     WireReq cmd' params'
+              Just x -> error "already have a session running"
 
-startProcess :: (MonadIO m) => Output Value -> m (Output WireRequest,STM ())
-startProcess out =
+startProcess :: (MonadIO m) => Output Value -> FilePath -> m (Output WireRequest,STM ())
+startProcess out file =
   do (procOut,procIn,procSeal) <- liftIO (spawn' unbounded)
-     liftIO $ forkIO (sessionProcess out procIn)
+     liftIO $ forkIO (sessionProcess out file procIn)
      pure (procOut,procSeal)
 
-sessionProcess :: Output Value -> Input WireRequest -> IO ()
-sessionProcess = undefined
+sessionProcess :: Output Value -> FilePath -> Input WireRequest -> IO ()
+sessionProcess valOut file wireIn =
+  do (_stdin,mayStdout,Just stderr,processHandle) <-
+       createProcess
+         ((proc "hie" ["--tcp","-d","-l","log","-r",root]) {std_in = Inherit
+                                                           ,std_out =
+                                                              CreatePipe
+                                                           ,std_err =
+                                                              CreatePipe})
+     putStrLn "created process"
+     case mayStdout of
+       Just stdout ->
+         do tcpParse <-
+              SS.evalStateT PAe.decode
+                            (PB.fromHandle stdout)
+            case tcpParse of
+              Nothing -> error "no input"
+              Just (Left err) -> error "couldn’t parse tcp error"
+              Just (Right (TCP port)) ->
+                do
+                   -- hie is listening so we should be able to connect
+                   putStrLn $
+                     "running on port " <> show port
+                   forkIO $
+                     runEffect $
+                     PB.fromHandle stdout >-> P.map ("stdout: " <>) >->
+                     PB.stdout
+                   forkIO $
+                     runEffect $
+                     PB.fromHandle stderr >-> P.map ("stderr: " <>) >->
+                     PB.stdout
+                   runSafeT $
+                     retryFor (secondsToDiffTime 5)
+                              100000
+                              (connect "127.0.0.1" (show port) $
+                               \(socket,addr) ->
+                                 do let producer = fromSocket socket 4096
+                                        consumer = toSocket socket
+                                    liftIO $ putStrLn "connected"
+                                    let filterResponses
+                                          :: (MonadIO m)
+                                          => Pipe (Either PAe.DecodingError WireResponse) WireResponse m ()
+                                        filterResponses = filterErrors valOut
+                                    liftIO $
+                                      forkIO $
+                                      runEffect $
+                                      parseFrames (producer) >->
+                                      filterResponses >->
+                                      P.map toJSON >->
+                                      toOutput valOut
+                                    runEffect $
+                                      fromInput wireIn >-> P.map toJSON >->
+                                      serializePipe >->
+                                      consumer)
+       Nothing -> error "no stdout handle"
+  where root = takeDirectory file
+
+data TCP = TCP {tcpPort :: Int} deriving (Show)
+
+instance FromJSON TCP where
+  parseJSON =
+    withObject "TCP"
+               (\o -> TCP <$> (o .: "tcp" >>= (.: "port")))
+
+-- | for how long, interval
+retryFor :: (MonadIO m, MonadCatch m) => DiffTime -> Int -> m r -> m r
+retryFor for interval act =
+  do start <- liftIO getCurrentTime
+     go start
+  where go t =
+          act `catch`
+          (\(e :: IOException) ->
+             do now <- liftIO getCurrentTime
+                liftIO (putStrLn "catched an exception")
+                if realToFrac (now `diffUTCTime` t) >= for
+                   then throwM e
+                   else liftIO (putStrLn "retrying") >>
+                        liftIO (threadDelay interval) >> go t)

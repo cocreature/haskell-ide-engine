@@ -13,4 +13,4 @@ managerOpts =
   ManagerOpts <$>
   option auto
          (long "port" <> metavar "PORT" <> help "port used for communication" <>
-          value 8888)
+          value 8889)
