@@ -21,7 +21,8 @@ executable hie-manager
   main-is:             Haskell/Ide/Engine/Manager/Main.hs
   other-modules:       Haskell.Ide.Engine.Manager.Options
   -- other-extensions:
-  build-depends:       aeson
+  build-depends:       MonadRandom
+                     , aeson
                      , base
                      , bytestring
                      , containers
