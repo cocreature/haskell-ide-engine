@@ -29,6 +29,7 @@ executable hie-manager
                      , directory
                      , exceptions
                      , filepath
+                     , ghc-mod
                      , haskell-ide-engine
                      , hie-base
                      , lens

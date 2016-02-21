@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Haskell.Ide.Engine.Transport.JsonTcp where
 
 import           Control.Concurrent
@@ -5,6 +6,8 @@ import           Control.Concurrent.STM.TChan
 import           Control.Monad
 import           Control.Monad.IO.Class
 import           Control.Monad.STM
+import           Data.Aeson
+import qualified Data.ByteString.Lazy.Char8 as BS
 import           Haskell.Ide.Engine.Transport.Pipes
 import           Haskell.Ide.Engine.Types
 import qualified Pipes as P
@@ -16,7 +19,8 @@ jsonTcpTransport oneShot cin host service =
      runSafeT $
        listen host service $
        \(lsock,_addr) ->
-         do liftIO $ putStrLn $ "{\"tcp\": {\"port\": " ++ service ++ "}}"
+         do -- TODO: Find a clean way to output this
+            liftIO $ BS.putStrLn $ encode $ object ["tcp" .= object ["port" .= service]]
             forever $ acceptFork lsock $ \(socket,_addr) ->
               do let producer = fromSocket socket 4096
                      consumer = toSocket socket
