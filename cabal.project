@@ -1,0 +1,10 @@
+packages: haskell-ide-engine.cabal
+          hie-apply-refact/hie-apply-refact.cabal
+          hie-base/hie-base.cabal
+          hie-example-plugin2/hie-example-plugin2.cabal
+          hie-eg-plugin-async/hie-eg-plugin-async.cabal
+          hie-plugin-api/hie-plugin-api.cabal
+          hie-ghc-mod/hie-ghc-mod.cabal
+          hie-ghc-tree/hie-ghc-tree.cabal
+          hie-hare/hie-hare.cabal
+          hie-docs-generator/hie-docs-generator.cabal
