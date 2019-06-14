@@ -1,4 +1,3 @@
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections #-}
 module HIE.Bios.Cradle (
       findCradle
@@ -112,7 +111,15 @@ cabalCradle wdir mc = do
   }
 
 cabalWrapper :: String
-cabalWrapper = $(embedStringFile "wrappers/cabal")
+cabalWrapper = unlines
+  [ "#!/usr/bin/env bash"
+  , "if [ \"$1\" == \"--interactive\" ]; then"
+  , "  pwd"
+  , "  echo \"$@\""
+  , "else"
+  , "  ghc \"$@\""
+  , "fi"
+  ]
 
 cabalAction :: FilePath -> Maybe String -> FilePath -> IO (ExitCode, String, [String])
 cabalAction work_dir mc _fp = do
@@ -162,7 +169,7 @@ stackCradle wdir =
 
 -- Same wrapper works as with cabal
 stackWrapper :: String
-stackWrapper = $(embedStringFile "wrappers/cabal")
+stackWrapper = cabalWrapper
 
 stackAction :: FilePath -> FilePath -> IO (ExitCode, String, [String])
 stackAction work_dir fp = do
@@ -211,7 +218,12 @@ rulesHaskellCradle wdir = do
 
 
 bazelCommand :: String
-bazelCommand = $(embedStringFile "wrappers/bazel")
+bazelCommand = unlines
+  [ "#!/usr/bin/env bash"
+  , "fullname=$(bazel query \"$1\")"
+  , "attr=$(bazel query \"kind(haskell_*, attr('srcs', $fullname, ${fullname//:*/}:*))\")"
+  , "bazel build \"$attr@repl\" --experimental_show_artifacts 2>&1 | sed -ne '/>>>/ s/^>>>\\(.*\\)$/\1/ p' | xargs tail -1"
+  ]
 
 rulesHaskellAction :: FilePath -> FilePath -> IO (ExitCode, String, [String])
 rulesHaskellAction work_dir fp = do
